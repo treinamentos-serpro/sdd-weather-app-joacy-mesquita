@@ -1,47 +1,54 @@
-import { useState, type FormEvent } from 'react';
+import { useState } from 'react';
 
 interface SearchBarProps {
   onSearch: (city: string) => void;
   disabled?: boolean;
 }
 
-/** Barra de busca de cidade. Bloqueia submit com input vazio. */
-export default function SearchBar({ onSearch, disabled }: SearchBarProps) {
-  const [value, setValue] = useState('');
+export default function SearchBar({ onSearch, disabled = false }: SearchBarProps) {
+  const [city, setCity] = useState('');
 
-  function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    const trimmed = value.trim();
-    if (!trimmed) return;
-    onSearch(trimmed);
+  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const trimmedCity = city.trim();
+
+    if (!trimmedCity || disabled) {
+      return;
+    }
+
+    onSearch(trimmedCity);
   }
 
   return (
-    <form role="search" onSubmit={handleSubmit} className="w-full max-w-md">
-      <div className="flex items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 backdrop-blur-md focus-within:border-accent-500">
-        <span aria-hidden="true" className="text-white/50">
-          🔍
-        </span>
-        <label htmlFor="city-search" className="sr-only">
-          Buscar cidade
-        </label>
+    <form role="search" aria-label="Buscar cidade" onSubmit={handleSubmit} className="w-full">
+      <label htmlFor="city-search" className="mb-2 block text-sm font-medium text-slate-300">
+        Nome da cidade
+      </label>
+      <div className="flex gap-2">
         <input
           id="city-search"
-          type="text"
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          placeholder="Buscar cidade…"
+          type="search"
+          value={city}
+          onChange={(event) => setCity(event.currentTarget.value)}
+          placeholder="Digite uma cidade"
           autoComplete="off"
-          className="flex-1 bg-transparent text-white placeholder-white/40 outline-none"
+          disabled={disabled}
+          aria-describedby="city-search-status"
+          className="min-w-0 flex-1 rounded-xl border border-white/10 bg-night-800 px-4 py-3 text-sm text-white placeholder:text-slate-500 focus:border-accent-400 focus:outline-none focus:ring-2 focus:ring-accent-400/40"
         />
         <button
           type="submit"
-          disabled={disabled || !value.trim()}
-          className="rounded-lg bg-accent-500 px-4 py-1.5 text-sm font-semibold text-white transition hover:bg-accent-600 disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={disabled || city.trim().length === 0}
+          className="rounded-xl bg-accent-500 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-accent-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-400 disabled:cursor-not-allowed disabled:opacity-50"
         >
           Buscar
         </button>
       </div>
+      <p id="city-search-status" className="mt-3 text-xs leading-5 text-slate-400" role="status">
+        {disabled
+          ? 'Aguarde a consulta da cidade selecionada.'
+          : 'Digite uma cidade e pressione Enter para buscar.'}
+      </p>
     </form>
   );
 }

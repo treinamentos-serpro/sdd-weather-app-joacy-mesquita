@@ -1,44 +1,49 @@
-/**
- * Funções puras de formatação de datas para a previsão.
- */
+const ptBrNumberFormatter = new Intl.NumberFormat('pt-BR', {
+  maximumFractionDigits: 1,
+});
 
-const WEEKDAYS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
-const MONTHS = [
-  'Jan',
-  'Fev',
-  'Mar',
-  'Abr',
-  'Mai',
-  'Jun',
-  'Jul',
-  'Ago',
-  'Set',
-  'Out',
-  'Nov',
-  'Dez',
-];
+export function formatForecastDate(date: string): string {
+  const [year, month, day] = date.split('-').map(Number);
 
-/** Faz parse de uma data ISO (YYYY-MM-DD) como data local, sem fuso. */
-function parseLocalDate(iso: string): Date {
-  const [year, month, day] = iso.split('-').map(Number);
-  return new Date(year, (month ?? 1) - 1, day ?? 1);
+  if (!year || !month || !day) {
+    return 'Data indisponível';
+  }
+
+  const utcDate = new Date(Date.UTC(year, month - 1, day, 12));
+
+  return new Intl.DateTimeFormat('pt-BR', {
+    weekday: 'short',
+    day: '2-digit',
+    month: '2-digit',
+    timeZone: 'UTC',
+  }).format(utcDate);
 }
 
-/**
- * Rótulo do dia relativo a "hoje":
- * - índice 0 → "Hoje"
- * - índice 1 → "Amanhã"
- * - demais → dia da semana abreviado
- */
-export function getDayLabel(iso: string, index: number): string {
-  if (index === 0) return 'Hoje';
-  if (index === 1) return 'Amanhã';
-  const date = parseLocalDate(iso);
-  return WEEKDAYS[date.getDay()];
+export function formatObservationTime(isoTimestamp: string, timezone: string | null): string {
+  const date = new Date(isoTimestamp);
+
+  if (Number.isNaN(date.getTime())) {
+    return 'Horário indisponível';
+  }
+
+  return new Intl.DateTimeFormat('pt-BR', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    timeZone: timezone ?? 'UTC',
+  }).format(date);
 }
 
-/** Formata a data como "12 Jun". */
-export function getShortDate(iso: string): string {
-  const date = parseLocalDate(iso);
-  return `${date.getDate()} ${MONTHS[date.getMonth()]}`;
+export function isObservationStale(isoTimestamp: string, now = Date.now()): boolean {
+  const observedAt = Date.parse(isoTimestamp);
+
+  return !Number.isFinite(observedAt) || now - observedAt > 2 * 60 * 60 * 1_000;
+}
+
+export function formatNumber(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) {
+    return 'Indisponível';
+  }
+
+  return ptBrNumberFormatter.format(value);
 }

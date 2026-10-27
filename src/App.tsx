@@ -1,79 +1,103 @@
-import { useState } from 'react';
-import type { Unit } from './types/weather';
-import { useWeather } from './hooks/useWeather';
-import SearchBar from './components/SearchBar';
-import UnitToggle from './components/UnitToggle';
+import { useRef, useState } from 'react';
 import CurrentWeather from './components/CurrentWeather';
 import ForecastList from './components/ForecastList';
-import LoadingState from './components/states/LoadingState';
-import ErrorState from './components/states/ErrorState';
+import SearchBar from './components/SearchBar';
 import EmptyState from './components/states/EmptyState';
+import ErrorState from './components/states/ErrorState';
+import LoadingState from './components/states/LoadingState';
+import UnitToggle from './components/UnitToggle';
+import { findMockWeather } from './services/mockWeatherService';
+import type { RequestState, Unit, WeatherData } from './types/weather';
 
-/**
- * WeatherView — aplicação completa de previsão do tempo.
- *
- * Construída ao longo do treinamento de Spec-Driven Development com GitHub
- * Copilot, do briefing à entrega.
- */
 export default function App() {
-  const { status, data, error, query, search, retry } = useWeather();
+  const [weatherState, setWeatherState] = useState<RequestState<WeatherData>>({ status: 'idle' });
   const [unit, setUnit] = useState<Unit>('celsius');
+  const lastSearch = useRef('');
+  const requestId = useRef(0);
+
+  async function searchCity(city: string) {
+    lastSearch.current = city;
+    const currentRequestId = ++requestId.current;
+    setWeatherState({ status: 'loading' });
+
+    try {
+      const data = await findMockWeather(city);
+
+      if (currentRequestId !== requestId.current) {
+        return;
+      }
+
+      setWeatherState(data ? { status: 'success', data } : { status: 'empty' });
+    } catch (error) {
+      if (currentRequestId !== requestId.current) {
+        return;
+      }
+
+      setWeatherState({
+        status: 'error',
+        kind: 'network',
+        message: error instanceof Error ? error.message : 'Não foi possível consultar os dados.',
+      });
+    }
+  }
+
+  function retrySearch() {
+    if (lastSearch.current) {
+      void searchCity(lastSearch.current);
+    }
+  }
 
   return (
-    <div className="min-h-screen text-white">
-      <header className="border-b border-white/10">
-        <div className="mx-auto flex max-w-5xl flex-col gap-4 px-4 py-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-2">
-            <span aria-hidden="true" className="text-2xl text-sun">
-              ☀️
-            </span>
-            <span className="text-lg font-bold">WeatherView</span>
+    <main className="min-h-screen bg-night-900 px-4 py-8 text-slate-100 sm:px-8 sm:py-12">
+      <div className="mx-auto max-w-6xl">
+        <header className="mb-10 grid gap-6 border-b border-white/10 pb-8 sm:mb-14 sm:pb-10 lg:grid-cols-[auto_minmax(18rem,1fr)_auto] lg:items-end">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-sun">Weather App</p>
+            <h1 className="mt-3 text-3xl font-semibold leading-tight text-white sm:text-4xl">
+              Tempo local
+            </h1>
+            <p className="mt-2 text-sm text-slate-400">Clima atual e próximos cinco dias</p>
           </div>
-          <div className="flex items-center gap-3">
-            <SearchBar onSearch={search} disabled={status === 'loading'} />
+          <SearchBar onSearch={searchCity} disabled={weatherState.status === 'loading'} />
+          <div className="flex justify-start lg:justify-end">
             <UnitToggle unit={unit} onChange={setUnit} />
           </div>
-        </div>
-      </header>
+        </header>
 
-      <main className="mx-auto max-w-5xl space-y-8 px-4 py-8">
-        {status === 'idle' && (
-          <EmptyState
-            title="Busque uma cidade para começar"
-            hint="Ex.: Seattle, Lisboa, São Paulo…"
-          />
-        )}
-
-        {status === 'loading' && <LoadingState />}
-
-        {status === 'empty' && (
-          <EmptyState
-            title={`Nenhuma cidade encontrada para "${query}"`}
-            hint="Verifique a grafia e tente novamente."
-          />
-        )}
-
-        {status === 'error' && error && <ErrorState message={error} onRetry={retry} />}
-
-        {status === 'success' && data && (
-          <>
-            <CurrentWeather city={data.city} current={data.current} unit={unit} />
-            <ForecastList forecast={data.forecast} unit={unit} />
-          </>
-        )}
-      </main>
-
-      <footer className="py-8 text-center text-sm text-white/40">
-        Dados por{' '}
-        <a
-          href="https://open-meteo.com/"
-          target="_blank"
-          rel="noreferrer"
-          className="text-accent-400 hover:underline"
+        <section
+          aria-label="Condições meteorológicas"
+          className="rounded-2xl border border-white/10 bg-white/5 p-5 shadow-glass backdrop-blur-md sm:p-7"
         >
-          Open-Meteo
-        </a>
-      </footer>
-    </div>
+          {weatherState.status === 'idle' && (
+            <EmptyState
+              title="Clima local à sua espera"
+              description="Busque São Paulo para visualizar o exemplo de clima e previsão incluído nesta versão."
+            />
+          )}
+          {weatherState.status === 'loading' && (
+            <LoadingState label="Consultando o exemplo local…" />
+          )}
+          {weatherState.status === 'empty' && (
+            <EmptyState
+              title="Cidade não encontrada"
+              description="O exemplo local disponível é São Paulo. Tente buscar essa cidade."
+            />
+          )}
+          {weatherState.status === 'error' && (
+            <ErrorState message={weatherState.message} onRetry={retrySearch} />
+          )}
+          {weatherState.status === 'success' && (
+            <div className="space-y-7">
+              <CurrentWeather
+                city={weatherState.data.city}
+                current={weatherState.data.current}
+                unit={unit}
+              />
+              <ForecastList days={weatherState.data.forecastDays} unit={unit} />
+            </div>
+          )}
+        </section>
+      </div>
+    </main>
   );
 }

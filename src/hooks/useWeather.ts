@@ -1,90 +1,162 @@
-import { useCallback, useState } from 'react';
-import type { City, WeatherData } from '../types/weather';
-import { getWeather, searchCities, WeatherServiceError } from '../services/weatherService';
-
-export type WeatherStatus = 'idle' | 'loading' | 'success' | 'error' | 'empty';
+import { useEffect, useRef, useState } from 'react';
+import { validateSearchTerm } from '../lib/search';
+import { fetchWeatherData, searchCities, WeatherServiceError } from '../services/weatherService';
+import type { City, RequestState, Unit, WeatherData } from '../types/weather';
 
 interface UseWeatherResult {
-  status: WeatherStatus;
-  data: WeatherData | null;
-  cities: City[];
-  error: string | null;
   query: string;
-  search: (name: string) => Promise<void>;
-  selectCity: (city: City) => Promise<void>;
-  retry: () => Promise<void>;
+  searchState: RequestState<City[]>;
+  selectedCity: City | null;
+  weatherState: RequestState<WeatherData>;
+  unit: Unit;
+  setQuery: (value: string) => void;
+  submitSearch: () => void;
+  selectCity: (city: City) => void;
+  setUnit: (unit: Unit) => void;
+  retryWeather: () => void;
 }
 
-/**
- * Hook de orquestração: busca cidades, seleciona uma e carrega o clima.
- * Expõe uma máquina de estados simples (idle/loading/success/error/empty).
- */
 export function useWeather(): UseWeatherResult {
-  const [status, setStatus] = useState<WeatherStatus>('idle');
-  const [data, setData] = useState<WeatherData | null>(null);
-  const [cities, setCities] = useState<City[]>([]);
-  const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
-  const [lastCity, setLastCity] = useState<City | null>(null);
+  const [searchState, setSearchState] = useState<RequestState<City[]>>({ status: 'idle' });
+  const [selectedCity, setSelectedCity] = useState<City | null>(null);
+  const [weatherState, setWeatherState] = useState<RequestState<WeatherData>>({ status: 'idle' });
+  const [unit, setUnit] = useState<Unit>('celsius');
+  const [searchRevision, setSearchRevision] = useState(0);
+  const processedRevision = useRef(0);
+  const submittedQuery = useRef<string | null>(null);
+  const weatherController = useRef<AbortController | null>(null);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: search inicia o fluxo na montagem; loadWeather é estável
-  const search = useCallback(async (name: string) => {
-    const trimmed = name.trim();
-    setQuery(trimmed);
-    if (!trimmed) return;
+  useEffect(() => {
+    const validation = validateSearchTerm(query);
 
-    setStatus('loading');
-    setError(null);
-    setCities([]);
-    try {
-      const results = await searchCities(trimmed);
-      if (results.length === 0) {
-        setStatus('empty');
-        return;
-      }
-      // Seleciona automaticamente a primeira correspondência, mas mantém a
-      // lista para o usuário trocar.
-      setCities(results);
-      await loadWeather(results[0]);
-    } catch (err) {
-      setStatus('error');
-      setError(toMessage(err));
+    if (!validation.valid) {
+      setSearchState({ status: 'idle' });
+      return;
     }
-  }, []);
 
-  const loadWeather = useCallback(async (city: City) => {
-    setStatus('loading');
-    setError(null);
-    setLastCity(city);
-    try {
-      const weather = await getWeather(city);
-      setData(weather);
-      setStatus('success');
-    } catch (err) {
-      setStatus('error');
-      setError(toMessage(err));
+    const controller = new AbortController();
+    let active = true;
+    const submittedImmediately =
+      searchRevision !== processedRevision.current && submittedQuery.current === validation.query;
+    processedRevision.current = searchRevision;
+
+    if (submittedImmediately) {
+      submittedQuery.current = null;
     }
-  }, []);
 
-  const selectCity = useCallback(
-    async (city: City) => {
-      await loadWeather(city);
-    },
-    [loadWeather],
-  );
+    const delay = submittedImmediately ? 0 : 300;
 
-  const retry = useCallback(async () => {
-    if (lastCity) {
-      await loadWeather(lastCity);
-    } else if (query) {
-      await search(query);
+    const timeoutId = setTimeout(() => {
+      setSearchState({ status: 'loading' });
+
+      void searchCities(validation.query, controller.signal)
+        .then((cities) => {
+          if (!active) {
+            return;
+          }
+
+          setSearchState(
+            cities.length > 0 ? { status: 'success', data: cities } : { status: 'empty' },
+          );
+        })
+        .catch((error: unknown) => {
+          if (!active || (error instanceof WeatherServiceError && error.kind === 'aborted')) {
+            return;
+          }
+
+          const serviceError =
+            error instanceof WeatherServiceError
+              ? error
+              : new WeatherServiceError('network', 'Não foi possível buscar cidades.');
+
+          setSearchState({
+            status: 'error',
+            kind: serviceError.kind === 'aborted' ? 'network' : serviceError.kind,
+            message: serviceError.message,
+          });
+        });
+    }, delay);
+
+    return () => {
+      active = false;
+      clearTimeout(timeoutId);
+      controller.abort();
+    };
+  }, [query, searchRevision]);
+
+  useEffect(() => () => weatherController.current?.abort(), []);
+
+  function submitSearch() {
+    const validation = validateSearchTerm(query);
+
+    if (!validation.valid) {
+      setSearchState({ status: 'idle' });
+      return;
     }
-  }, [lastCity, query, loadWeather, search]);
 
-  return { status, data, cities, error, query, search, selectCity, retry };
-}
+    submittedQuery.current = validation.query;
+    setSearchRevision((revision) => revision + 1);
+  }
 
-function toMessage(err: unknown): string {
-  if (err instanceof WeatherServiceError) return err.message;
-  return 'Algo deu errado. Tente novamente.';
+  function selectCity(city: City) {
+    setSelectedCity(city);
+    setSearchState({ status: 'idle' });
+    loadWeather(city);
+  }
+
+  function loadWeather(city: City) {
+    weatherController.current?.abort();
+    const controller = new AbortController();
+    weatherController.current = controller;
+    setWeatherState({ status: 'loading' });
+
+    void fetchWeatherData(city, controller.signal)
+      .then((data) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+
+        setSelectedCity(data.city);
+        setWeatherState({ status: 'success', data });
+      })
+      .catch((error: unknown) => {
+        if (
+          controller.signal.aborted ||
+          (error instanceof WeatherServiceError && error.kind === 'aborted')
+        ) {
+          return;
+        }
+
+        const serviceError =
+          error instanceof WeatherServiceError
+            ? error
+            : new WeatherServiceError('network', 'Não foi possível consultar o clima.');
+
+        setWeatherState({
+          status: 'error',
+          kind: serviceError.kind === 'aborted' ? 'network' : serviceError.kind,
+          message: serviceError.message,
+        });
+      });
+  }
+
+  function retryWeather() {
+    if (selectedCity) {
+      loadWeather(selectedCity);
+    }
+  }
+
+  return {
+    query,
+    searchState,
+    selectedCity,
+    weatherState,
+    unit,
+    setQuery,
+    submitSearch,
+    selectCity,
+    setUnit,
+    retryWeather,
+  };
 }

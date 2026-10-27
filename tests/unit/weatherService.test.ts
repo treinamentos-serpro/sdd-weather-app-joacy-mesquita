@@ -1,106 +1,163 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { searchCities, getWeather, WeatherServiceError } from '../../src/services/weatherService';
-import type { City } from '../../src/types/weather';
+import { fetchWeatherData, searchCities } from '../../src/services/weatherService';
 
-const CITY: City = {
-  id: 1,
-  name: 'Seattle',
-  country: 'Estados Unidos',
-  admin1: 'Washington',
-  latitude: 47.6,
-  longitude: -122.33,
+const cityResult = {
+  id: 2950159,
+  name: 'Berlim',
+  latitude: 52.52,
+  longitude: 13.41,
+  admin1: 'Berlim',
+  country: 'Alemanha',
+  country_code: 'DE',
+  timezone: 'Europe/Berlin',
 };
 
-function mockFetchOnce(body: unknown, ok = true) {
-  return vi.fn().mockResolvedValue({
-    ok,
-    json: async () => body,
-  } as Response);
-}
-
-describe('weatherService', () => {
-  beforeEach(() => {
-    vi.restoreAllMocks();
+describe('searchCities', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
+
+  it('sends the Open-Meteo geocoding parameters and maps results to City', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ results: [cityResult] }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const cities = await searchCities('São Paulo');
+    const requestUrl = new URL(fetchMock.mock.calls[0]?.[0] as URL);
+
+    expect(requestUrl.origin + requestUrl.pathname).toBe(
+      'https://geocoding-api.open-meteo.com/v1/search',
+    );
+    expect(requestUrl.searchParams.get('name')).toBe('São Paulo');
+    expect(requestUrl.searchParams.get('count')).toBe('5');
+    expect(requestUrl.searchParams.get('language')).toBe('pt');
+    expect(requestUrl.searchParams.get('format')).toBe('json');
+    expect(cities).toEqual([
+      {
+        id: 2950159,
+        name: 'Berlim',
+        latitude: 52.52,
+        longitude: 13.41,
+        region: 'Berlim',
+        country: 'Alemanha',
+        countryCode: 'DE',
+        timezone: 'Europe/Berlin',
+      },
+    ]);
+  });
+
+  it('normalizes a successful response without results to an empty list', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+
+    await expect(searchCities('Nowhere')).resolves.toEqual([]);
+  });
+
+  it('reports rate limiting as an HTTP error', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 429 })));
+
+    await expect(searchCities('Berlim')).rejects.toMatchObject({
+      kind: 'http',
+      statusCode: 429,
+    });
+  });
+
+  it('aborts the request after ten seconds', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        (_input: RequestInfo | URL, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () =>
+              reject(new DOMException('Aborted', 'AbortError')),
+            );
+          }),
+      ),
+    );
+
+    const request = searchCities('Berlim');
+    const assertion = expect(request).rejects.toMatchObject({ kind: 'timeout' });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await assertion;
+  });
+});
+
+describe('fetchWeatherData', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  describe('searchCities', () => {
-    it('retorna lista vazia para input vazio sem chamar a rede', async () => {
-      const fetchSpy = vi.fn();
-      vi.stubGlobal('fetch', fetchSpy);
-      const result = await searchCities('   ');
-      expect(result).toEqual([]);
-      expect(fetchSpy).not.toHaveBeenCalled();
-    });
-
-    it('mapeia resultados de geocoding', async () => {
-      vi.stubGlobal(
-        'fetch',
-        mockFetchOnce({
-          results: [
-            {
-              id: 1,
-              name: 'Seattle',
-              country: 'Estados Unidos',
-              admin1: 'Washington',
-              latitude: 47.6,
-              longitude: -122.33,
-            },
-          ],
-        }),
-      );
-      const result = await searchCities('Seattle');
-      expect(result).toHaveLength(1);
-      expect(result[0].name).toBe('Seattle');
-    });
-
-    it('retorna vazio quando não há results', async () => {
-      vi.stubGlobal('fetch', mockFetchOnce({}));
-      expect(await searchCities('xyzxyz')).toEqual([]);
-    });
-
-    it('lança erro tipado em resposta não-ok', async () => {
-      vi.stubGlobal('fetch', mockFetchOnce({}, false));
-      await expect(searchCities('Seattle')).rejects.toBeInstanceOf(WeatherServiceError);
-    });
-  });
-
-  describe('getWeather', () => {
-    it('mapeia current e daily para WeatherData', async () => {
-      vi.stubGlobal(
-        'fetch',
-        mockFetchOnce({
+  it('requests current and daily fields and maps the response to domain data', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          timezone: 'Europe/Berlin',
+          utc_offset_seconds: 3600,
           current: {
-            time: '2026-06-16T12:00',
-            temperature_2m: 18,
-            relative_humidity_2m: 80,
-            wind_speed_10m: 10,
-            surface_pressure: 1015,
-            precipitation: 0,
+            time: '2026-10-27T09:00',
+            temperature_2m: 12.4,
             weather_code: 3,
+            relative_humidity_2m: 65,
+            wind_speed_10m: 10.8,
+            pressure_msl: 1012.4,
+            precipitation: 0,
           },
           daily: {
-            time: ['2026-06-16', '2026-06-17', '2026-06-18', '2026-06-19', '2026-06-20'],
-            weather_code: [3, 61, 80, 1, 0],
-            temperature_2m_max: [20, 19, 22, 24, 25],
-            temperature_2m_min: [12, 11, 13, 14, 15],
-            precipitation_probability_max: [20, 90, 70, 10, null],
+            time: ['2026-10-27', '2026-10-28', '2026-10-29', '2026-10-30', '2026-10-31'],
+            weather_code: [3, 61, 2, 3, 1],
+            temperature_2m_min: [8.1, 7.4, 9.0, 8.6, 6.8],
+            temperature_2m_max: [14.2, 12.1, 15.0, 13.4, 12.8],
+            precipitation_probability_max: [10, 80, 20, 15, 5],
+            wind_speed_10m_max: [14.0, 20.5, 12.0, 16.4, 11.2],
           },
         }),
-      );
+        { status: 200 },
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
 
-      const data = await getWeather(CITY);
-      expect(data.current.temperature).toBe(18);
-      expect(data.forecast).toHaveLength(5);
-      // precipitação nula vira 0 (resposta parcial)
-      expect(data.forecast[4].precipitationProbability).toBe(0);
-    });
+    const data = await fetchWeatherData({ ...cityResult, region: 'Berlim', countryCode: 'DE' });
+    const requestUrl = new URL(fetchMock.mock.calls[0]?.[0] as URL);
 
-    it('lança erro quando a resposta está incompleta', async () => {
-      vi.stubGlobal('fetch', mockFetchOnce({ current: null, daily: null }));
-      await expect(getWeather(CITY)).rejects.toBeInstanceOf(WeatherServiceError);
+    expect(requestUrl.searchParams.get('timezone')).toBe('auto');
+    expect(requestUrl.searchParams.get('forecast_days')).toBe('5');
+    expect(requestUrl.searchParams.get('temperature_unit')).toBe('celsius');
+    expect(requestUrl.searchParams.get('current')).toContain('pressure_msl');
+    expect(requestUrl.searchParams.get('daily')).toContain('temperature_2m_min');
+    expect(data.current.observedAt).toBe('2026-10-27T08:00:00.000Z');
+    expect(data.forecastDays).toHaveLength(5);
+    expect(data.forecastDays[0]).toMatchObject({
+      date: '2026-10-27',
+      temperatureMinC: 8.1,
+      temperatureMaxC: 14.2,
     });
+    expect(data.city.timezone).toBe('Europe/Berlin');
+  });
+
+  it('keeps missing current and daily values unavailable', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            timezone: 'Europe/Berlin',
+            utc_offset_seconds: 3600,
+            current: { time: '2026-10-27T09:00', temperature_2m: 12 },
+            daily: { time: ['2026-10-27'] },
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+
+    const data = await fetchWeatherData({ ...cityResult, region: 'Berlim', countryCode: 'DE' });
+
+    expect(data.current.relativeHumidityPercent).toBeNull();
+    expect(data.forecastDays).toHaveLength(5);
+    expect(data.forecastDays[0]?.temperatureMinC).toBeNull();
+    expect(data.forecastDays[4]?.date).toBe('2026-10-31');
+    expect(data.forecastDays[4]?.weatherCode).toBeNull();
   });
 });

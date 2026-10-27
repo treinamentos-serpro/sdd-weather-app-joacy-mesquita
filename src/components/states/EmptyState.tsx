@@ -1,17 +1,13 @@
 interface EmptyStateProps {
   title: string;
-  hint?: string;
+  description: string;
 }
 
-/** Estado vazio (nenhuma busca feita ou nenhum resultado). */
-export default function EmptyState({ title, hint }: EmptyStateProps) {
+export default function EmptyState({ title, description }: EmptyStateProps) {
   return (
-    <div className="flex flex-col items-center gap-2 py-16 text-center">
-      <span aria-hidden="true" className="text-4xl">
-        🌍
-      </span>
-      <p className="text-white/80">{title}</p>
-      {hint && <p className="text-sm text-white/50">{hint}</p>}
+    <div className="py-12 text-center">
+      <h2 className="text-xl font-semibold text-white">{title}</h2>
+      <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-400">{description}</p>
     </div>
   );
 }
